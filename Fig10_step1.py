@@ -13,6 +13,27 @@ N_beta_search = 250
 number_of_modes = 2
 
 def solve_parameter_set(kmid_abs, alpha_value, verbose=False):
+    """
+    Analyze one point in the (-k_mid, alpha) plane.
+
+    Parameters
+    ----------
+    kmid_abs : float
+        Positive quantity -k_mid.
+        Thus a_mid = -kmid_abs.
+
+    alpha_value : float
+        Position of the outer minimum.
+
+    Returns
+    -------
+    result : dict
+
+        class = 2 : Mpemba crossing exists
+        class = 1 : a2 has a peak but no crossing
+        class = 0 : no interior peak in a2
+        class = -1: numerical/parameter failure
+    """
     a_in = 1.0
     a_mid = -float(kmid_abs)
     a_out = 1.0
@@ -201,21 +222,21 @@ def solve_parameter_set(kmid_abs, alpha_value, verbose=False):
 
     def a2_of_beta(beta_ini):
         return mode_amplitude(0, beta_ini)
-    peak_result = minimize_scalar(lambda x: -a2_of_beta(x), bounds=(beta_min, beta_max), method='bounded', options={'xatol': 1e-05})
-    if not peak_result.success:
-        return {'class': -1, 'reason': 'peak optimization failed', 'V_alpha': V_alpha}
-    beta_peak = peak_result.x
-    a2_peak = a2_of_beta(beta_peak)
-    boundary_margin = 0.03
-    if beta_peak <= beta_min + boundary_margin or beta_peak >= beta_max - boundary_margin:
-        return {'class': 0, 'reason': 'no Mpemba effect: no interior a2 peak', 'beta_peak': beta_peak, 'a2_peak': a2_peak, 'lambda_2': new_roots[0], 'lambda_3': new_roots[1], 'V_alpha': V_alpha}
-    db = 0.01
-    beta_left = max(beta_min, beta_peak - db)
-    beta_right = min(beta_max, beta_peak + db)
-    a2_left = a2_of_beta(beta_left)
-    a2_right = a2_of_beta(beta_right)
-    if not (a2_peak > a2_left and a2_peak > a2_right):
-        return {'class': 0, 'reason': 'no Mpemba effect: a2 extremum is not a local maximum', 'beta_peak': beta_peak, 'a2_peak': a2_peak, 'lambda_2': new_roots[0], 'lambda_3': new_roots[1], 'V_alpha': V_alpha}
+    beta_grid = np.linspace(beta_min, beta_max, 300)
+    a2_grid = np.array([a2_of_beta(b) for b in beta_grid])
+    peak_indices = np.where((a2_grid[1:-1] > a2_grid[:-2]) & (a2_grid[1:-1] > a2_grid[2:]))[0] + 1
+    if len(peak_indices) == 0:
+        return {'class': 0, 'reason': 'no interior a2 peak', 'lambda_2': new_roots[0], 'lambda_3': new_roots[1], 'V_alpha': V_alpha}
+    refined_peaks = []
+    for idx in peak_indices:
+        left = beta_grid[idx - 1]
+        right = beta_grid[idx + 1]
+        result = minimize_scalar(lambda x: -a2_of_beta(x), bounds=(left, right), method='bounded', options={'xatol': 1e-06})
+        if result.success:
+            refined_peaks.append((result.x, a2_of_beta(result.x)))
+    if len(refined_peaks) == 0:
+        return {'class': -1, 'reason': 'peak refinement failed', 'lambda_2': new_roots[0], 'lambda_3': new_roots[1], 'V_alpha': V_alpha}
+    beta_peak, a2_peak = max(refined_peaks, key=lambda item: item[1])
     a3_peak = mode_amplitude(1, beta_peak)
     beta_candidates = np.linspace(beta_min, beta_max, N_beta_search)
     best_F = np.inf
@@ -243,18 +264,11 @@ def solve_parameter_set(kmid_abs, alpha_value, verbose=False):
         if F_value < -1.0:
             crossing_exists = True
     if crossing_exists:
-        if beta_peak < beta:
-            phase_class = 2
-            reason = 'normal Mpemba effect'
-        elif beta_peak > beta:
-            phase_class = 1
-            reason = 'inverse Mpemba effect'
-        else:
-            phase_class = 0
-            reason = 'no Mpemba effect: beta_peak = beta'
+        phase_class = 2
+        reason = 'Mpemba crossing exists'
     else:
-        phase_class = 0
-        reason = 'no Mpemba effect: crossing condition not satisfied'
+        phase_class = 1
+        reason = 'a2 has a peak but no crossing'
     return {'class': phase_class, 'reason': reason, 'beta_peak': beta_peak, 'beta_other': best_beta_other, 'a2_peak': a2_peak, 'a3_peak': a3_peak, 'best_F': best_F, 'Delta2': best_Delta2, 'Delta3': best_Delta3, 'lambda_2': new_roots[0], 'lambda_3': new_roots[1], 'V_alpha': V_alpha, 'r_m': r_m, 'r_p': r_p}
 kmid_abs_list = np.linspace(0.05, 2.0, 40)
 alpha_list = np.linspace(1.05, 3.0, 40)
